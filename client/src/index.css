@@ -1,0 +1,124 @@
+/* client/src/index.css */
+@import "tailwindcss";
+
+/* Animação do loader */
+.spinner {
+	margin: 0 auto;
+	width: 70px;
+	text-align: center;
+}
+
+.spinner > div {
+	width: 12px;
+	height: 12px;
+	background-color: #4f46e5;
+	border-radius: 100%;
+	display: inline-block;
+	animation: sk-bouncedelay 1.4s infinite ease-in-out both;
+	margin: 0 2px;
+}
+
+.spinner .bounce1 {
+	animation-delay: -0.32s;
+}
+
+.spinner .bounce2 {
+	animation-delay: -0.16s;
+}
+
+@keyframes sk-bouncedelay {
+	0%,
+	80%,
+	100% {
+		transform: scale(0);
+	}
+	40% {
+		transform: scale(1);
+	}
+}
+
+/* Animação de digitação */
+.typing-indicator {
+	display: flex;
+	align-items: center;
+}
+
+.typing-indicator span {
+	height: 8px;
+	width: 8px;
+	background-color: #6b7280;
+	border-radius: 50%;
+	display: inline-block;
+	margin: 0 1px;
+	opacity: 0.6;
+	animation: typing-bounce 1.4s infinite ease-in-out both;
+}
+
+.typing-indicator span:nth-child(1) {
+	animation-delay: -0.32s;
+}
+
+.typing-indicator span:nth-child(2) {
+	animation-delay: -0.16s;
+}
+
+@keyframes typing-bounce {
+	0%,
+	80%,
+	100% {
+		transform: scale(0.6);
+	}
+	40% {
+		transform: scale(1);
+	}
+}
+
+/* Estilização da barra de rolagem */
+::-webkit-scrollbar {
+	width: 6px;
+	height: 6px;
+}
+
+::-webkit-scrollbar-track {
+	background: #f1f1f1;
+	border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+	background: #c5c5c5;
+	border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+	background: #a8a8a8;
+}
+
+/* Estilos para links dentro de mensagens */
+.message-content a {
+	color: #4f46e5;
+	text-decoration: underline;
+}
+
+/* Estilos para código dentro de mensagens */
+.message-content code {
+	font-family: monospace;
+	background-color: #f0f0f0;
+	padding: 2px 4px;
+	border-radius: 3px;
+	font-size: 90%;
+}
+
+/* Estilos para blocos de código dentro de mensagens */
+.message-content pre {
+	background-color: #f0f0f0;
+	padding: 8px;
+	border-radius: 6px;
+	overflow-x: auto;
+	margin: 8px 0;
+}
+
+.message-content pre code {
+	background-color: transparent;
+	padding: 0;
+	border-radius: 0;
+}
