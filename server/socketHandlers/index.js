@@ -52,13 +52,19 @@ module.exports = (io) => {
 					conversation: conversationId,
 					content,
 					attachments = [],
+					replyTo,
 				} = data;
+
+				console.log(
+					`Recebendo mensagem para conversa ${conversationId}`
+				);
 
 				// Verificações básicas
 				if (
 					!conversationId ||
 					(!content && (!attachments || attachments.length === 0))
 				) {
+					console.log("Dados de mensagem inválidos");
 					return;
 				}
 
@@ -66,10 +72,18 @@ module.exports = (io) => {
 				const conversation = await Conversation.findById(
 					conversationId
 				);
-				if (!conversation) return;
+				if (!conversation) {
+					console.log("Conversa não encontrada");
+					return;
+				}
 
 				// Verifica se é participante
-				if (!conversation.participants.includes(user._id)) {
+				if (
+					!conversation.participants.some(
+						(p) => p.toString() === user._id.toString()
+					)
+				) {
+					console.log("Usuário não é participante da conversa");
 					return;
 				}
 
@@ -77,8 +91,9 @@ module.exports = (io) => {
 				const newMessage = new Message({
 					conversation: conversationId,
 					sender: user._id,
-					content,
+					content: content ? content.trim() : undefined,
 					attachments,
+					replyTo,
 					readBy: [user._id], // Já marca como lida pelo remetente
 				});
 
@@ -87,10 +102,25 @@ module.exports = (io) => {
 				// Popula o remetente para enviar dados completos
 				await newMessage.populate("sender", "displayName avatar");
 
-				// Atualiza a conversa com a última mensagem
-				conversation.lastMessage = newMessage._id;
-				await conversation.save();
+				if (replyTo) {
+					await newMessage.populate({
+						path: "replyTo",
+						populate: {
+							path: "sender",
+							select: "displayName",
+						},
+					});
+				}
 
+				// Atualiza a conversa com a última mensagem
+				await Conversation.findByIdAndUpdate(conversationId, {
+					lastMessage: newMessage._id,
+					updatedAt: new Date(),
+				});
+
+				console.log(
+					`Enviando mensagem para sala conversation:${conversationId}`
+				);
 				// Envia para todos na sala da conversa
 				io.to(`conversation:${conversationId}`).emit(
 					"new_message",
@@ -99,23 +129,25 @@ module.exports = (io) => {
 
 				// Notificações para usuários offline ou em outras conversas
 				conversation.participants.forEach(async (participantId) => {
-					// Ignora o remetente
-					if (participantId.equals(user._id)) return;
+					const participantIdStr = participantId.toString();
 
-					// Verifica se o receptor está online
-					const receiverSocketId = onlineUsers.get(
-						participantId.toString()
+					// Ignora o remetente
+					if (participantIdStr === user._id.toString()) return;
+
+					// Incrementa contador não lido na conversa para outros participantes
+					await Conversation.findOneAndUpdate(
+						{
+							_id: conversationId,
+							participants: participantId,
+						},
+						{ $inc: { unreadCount: 1 } }
 					);
 
-					// Se estiver online mas em outra conversa
+					// Notifica outros usuários online que não estejam na mesma conversa
+					const receiverSocketId = onlineUsers.get(participantIdStr);
 					if (receiverSocketId) {
-						// Incrementa contador não lido na conversa
-						await Conversation.findOneAndUpdate(
-							{
-								_id: conversationId,
-								participants: participantId,
-							},
-							{ $inc: { unreadCount: 1 } }
+						console.log(
+							`Notificando usuário ${participantIdStr} sobre nova mensagem`
 						);
 					}
 				});
@@ -135,7 +167,12 @@ module.exports = (io) => {
 				if (!message) return;
 
 				// Verifica se já foi lida
-				if (message.readBy.includes(user._id)) return;
+				if (
+					message.readBy.some(
+						(id) => id.toString() === user._id.toString()
+					)
+				)
+					return;
 
 				// Marca como lida
 				message.readBy.push(user._id);
@@ -183,20 +220,24 @@ module.exports = (io) => {
 		socket.on("create_conversation", async (data) => {
 			try {
 				const { userIds, isGroup, name } = data;
+				const userIdStr = user._id.toString();
+
+				// Criar cópia dos IDs para não modificar o array original
+				let participantIds = [...userIds];
 
 				// Adiciona o próprio usuário se não estiver na lista
-				if (!userIds.includes(user._id.toString())) {
-					userIds.push(user._id.toString());
+				if (!participantIds.includes(userIdStr)) {
+					participantIds.push(userIdStr);
 				}
 
 				// Validações básicas
-				if (userIds.length < 2) return;
+				if (participantIds.length < 2) return;
 				if (isGroup && !name) return;
 
 				// Para conversas diretas, verifica se já existe
-				if (!isGroup && userIds.length === 2) {
-					const otherUserId = userIds.find(
-						(id) => id !== user._id.toString()
+				if (!isGroup && participantIds.length === 2) {
+					const otherUserId = participantIds.find(
+						(id) => id !== userIdStr
 					);
 
 					// Verifica se já existe conversa entre os dois
@@ -204,8 +245,12 @@ module.exports = (io) => {
 						isGroup: false,
 						participants: {
 							$all: [user._id, otherUserId],
+							$size: 2,
 						},
-					}).populate("participants", "displayName avatar status");
+					}).populate(
+						"participants",
+						"displayName avatar status lastSeen"
+					);
 
 					if (existingConversation) {
 						// Entra na sala
@@ -221,7 +266,7 @@ module.exports = (io) => {
 				const newConversation = new Conversation({
 					name: isGroup ? name : undefined,
 					isGroup,
-					participants: userIds,
+					participants: participantIds,
 					admins: isGroup ? [user._id] : [],
 					createdBy: user._id,
 				});
@@ -231,21 +276,25 @@ module.exports = (io) => {
 				// Popula os participantes
 				await newConversation.populate(
 					"participants",
-					"displayName avatar status"
+					"displayName avatar status lastSeen"
 				);
 
 				// Cada participante entra na sala
-				userIds.forEach((userId) => {
+				participantIds.forEach((userId) => {
 					const participantSocketId = onlineUsers.get(userId);
 					if (participantSocketId) {
-						io.sockets.sockets
-							.get(participantSocketId)
-							?.join(`conversation:${newConversation._id}`);
+						const participantSocket =
+							io.sockets.sockets.get(participantSocketId);
+						if (participantSocket) {
+							participantSocket.join(
+								`conversation:${newConversation._id}`
+							);
+						}
 					}
 				});
 
 				// Notifica todos os participantes sobre a nova conversa
-				userIds.forEach((userId) => {
+				participantIds.forEach((userId) => {
 					const participantSocketId = onlineUsers.get(userId);
 					if (participantSocketId) {
 						io.to(participantSocketId).emit(
@@ -383,9 +432,12 @@ module.exports = (io) => {
 			});
 
 			// Entra em cada sala de conversa
-			conversations.forEach((conversation) => {
+			for (const conversation of conversations) {
+				console.log(
+					`Usuário ${userId} entrando na sala conversation:${conversation._id}`
+				);
 				socket.join(`conversation:${conversation._id}`);
-			});
+			}
 		} catch (error) {
 			console.error("Erro ao entrar nas salas do usuário:", error);
 		}
@@ -417,54 +469,54 @@ module.exports = (io) => {
 	}
 
 	// Função para aceitar solicitação de amizade
-	async function acceptFriendRequest(request, userId) {
-		try {
-			// Atualiza status
-			request.status = "accepted";
-			await request.save();
+    async function acceptFriendRequest(request, userId) {
+        try {
+            // Atualiza status
+            request.status = "accepted";
+            await request.save();
 
-			// Atualiza listas de amigos
-			await User.findByIdAndUpdate(request.sender, {
-				$addToSet: { friends: request.recipient },
-			});
+            // Atualiza listas de amigos
+            await User.findByIdAndUpdate(request.sender, {
+                $addToSet: { friends: request.recipient },
+            });
 
-			await User.findByIdAndUpdate(request.recipient, {
-				$addToSet: { friends: request.sender },
-			});
+            await User.findByIdAndUpdate(request.recipient, {
+                $addToSet: { friends: request.sender },
+            });
 
-			// Busca detalhes do amigo para o remetente
-			const recipientDetails = await User.findById(
-				request.recipient
-			).select("displayName avatar status lastSeen");
+            // Busca detalhes do amigo para o remetente
+            const recipientDetails = await User.findById(
+                request.recipient
+            ).select("displayName avatar status lastSeen");
 
-			// Busca detalhes do amigo para o destinatário
-			const senderDetails = await User.findById(request.sender).select(
-				"displayName avatar status lastSeen"
-			);
+            // Busca detalhes do amigo para o destinatário
+            const senderDetails = await User.findById(request.sender).select(
+                "displayName avatar status lastSeen"
+            );
 
-			// Notifica o remetente
-			const senderSocketId = onlineUsers.get(request.sender.toString());
-			if (senderSocketId) {
-				io.to(senderSocketId).emit("friend_request_accepted", {
-					requestId: request._id,
-					friend: recipientDetails,
-				});
-			}
+            // Notifica o remetente
+            const senderSocketId = onlineUsers.get(request.sender.toString());
+            if (senderSocketId) {
+                io.to(senderSocketId).emit("friend_request_accepted", {
+                    requestId: request._id,
+                    friend: recipientDetails,
+                });
+            }
 
-			// Notifica o destinatário
-			const recipientSocketId = onlineUsers.get(
-				request.recipient.toString()
-			);
-			if (recipientSocketId) {
-				io.to(recipientSocketId).emit("friend_request_accepted", {
-					requestId: request._id,
-					friend: senderDetails,
-				});
-			}
-		} catch (error) {
-			console.error("Erro ao aceitar solicitação de amizade:", error);
-		}
-	}
+            // Notifica o destinatário
+            const recipientSocketId = onlineUsers.get(
+                request.recipient.toString()
+            );
+            if (recipientSocketId) {
+                io.to(recipientSocketId).emit("friend_request_accepted", {
+                    requestId: request._id,
+                    friend: senderDetails,
+                });
+            }
+        } catch (error) {
+            console.error("Erro ao aceitar solicitação de amizade:", error);
+        }
+    }
 
 	return {
 		onlineUsers,
